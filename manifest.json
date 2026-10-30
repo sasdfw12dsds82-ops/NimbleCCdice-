@@ -1,0 +1,16 @@
+{
+  "name": "Nimble → Dice+ Bridge",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "icon": "https://nimblesheet.ttrpg.tools/favicon.svg",
+  "homepage_url": "https://github.com",
+  "description": "Forwards dice rolls from Nimblesheet to the Dice+ extension in Owlbear Rodeo",
+  "author": "Bridge",
+  "action": {
+    "title": "Dice Bridge",
+    "icon": "/icon.svg",
+    "popover": "/",
+    "height": 280,
+    "width": 340
+  }
+}

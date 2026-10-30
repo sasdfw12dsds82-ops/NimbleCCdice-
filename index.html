@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nimble → Dice+ Bridge</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #1a1a1a;
+      color: #eee;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .status {
+      margin: 12px 0;
+      padding: 8px 10px;
+      background: #2a2a2a;
+      border-radius: 6px;
+      font-size: 13px;
+      min-height: 1.4em;
+    }
+    .log {
+      max-height: 120px;
+      overflow-y: auto;
+      font-size: 12px;
+      background: #111;
+      padding: 8px;
+      border-radius: 6px;
+      margin-top: 8px;
+    }
+    .log div {
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+    .ok { color: #7dcea0; }
+    .err { color: #f1948a; }
+    .muted { color: #888; font-size: 12px; margin-top: 12px; }
+    button {
+      background: #3a3a3a;
+      color: #eee;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+    button:hover { background: #4a4a4a; }
+  </style>
+</head>
+<body>
+  <h2>Nimble → Dice+ Bridge</h2>
+  <div id="status" class="status">Initializing…</div>
+  <div>
+    <button id="clear">Clear log</button>
+    <button id="test">Test roll</button>
+  </div>
+  <div id="log" class="log"></div>
+  <p class="muted">
+    Listens for Nimblesheet rolls and forwards them to Dice+.<br>
+    Both extensions must be enabled in the same room.
+  </p>
+
+  <script type="module">
+    import OBR from "https://esm.sh/@owlbear-rodeo/sdk@3.1.0";
+
+    const NIMBLE_ROLL_CHANNEL = "tools.ttrpg.obr-dicelog/roll";
+    const SOURCE_ID = "tools.ttrpg.nimble-diceplus-bridge";
+
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+
+    function log(msg, type = "") {
+      const div = document.createElement("div");
+      div.textContent = msg;
+      if (type) div.className = type;
+      logEl.prepend(div);
+      // Keep only last ~30 entries
+      while (logEl.children.length > 30) {
+        logEl.removeChild(logEl.lastChild);
+      }
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function isDicePlusReady() {
+      const requestId = crypto.randomUUID();
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          OBR.broadcast.offMessage("dice-plus/isReady", handler);
+          resolve(false);
+        }, 1500);
+
+        function handler(event) {
+          const data = event.data;
+          if (data && data.ready && data.requestId === requestId) {
+            clearTimeout(timeout);
+            OBR.broadcast.offMessage("dice-plus/isReady", handler);
+            resolve(true);
+          }
+        }
+
+        OBR.broadcast.onMessage("dice-plus/isReady", handler);
+        OBR.broadcast.sendMessage(
+          "dice-plus/isReady",
+          { requestId, timestamp: Date.now() },
+          { destination: "ALL" }
+        );
+      });
+    }
+
+    async function forwardToDicePlus(formula, label) {
+      if (!formula || typeof formula !== "string") return false;
+
+      // Basic cleanup of common Nimblesheet extras that Dice+ may not understand
+      let notation = formula
+        .replace(/\s+/g, "")
+        .replace(/v/g, "")          // remove vicious marker
+        .replace(/p[pm]\d*/g, "");  // remove primary offset markers
+
+      if (!notation || !/\d*d\d+/i.test(notation)) {
+        log(`Skipped (no valid dice): ${formula}`, "err");
+        return false;
+      }
+
+      const ready = await isDicePlusReady();
+      if (!ready) {
+        log("Dice+ not detected or not ready", "err");
+        setStatus("Dice+ not found");
+        return false;
+      }
+
+      const rollId = crypto.randomUUID();
+      try {
+        await OBR.broadcast.sendMessage(
+          "dice-plus/roll-request",
+          {
+            rollId,
+            playerId: await OBR.player.getId(),
+            playerName: await OBR.player.getName(),
+            rollTarget: "everyone",
+            diceNotation: notation,
+            showResults: true,
+            timestamp: Date.now(),
+            source: SOURCE_ID,
+          },
+          { destination: "ALL" }
+        );
+        const msg = label ? `${label}: ${notation}` : notation;
+        log(`→ ${msg}`, "ok");
+        setStatus(`Forwarded: ${notation}`);
+        return true;
+      } catch (err) {
+        log(`Error: ${err.message || err}`, "err");
+        return false;
+      }
+    }
+
+    OBR.onReady(async () => {
+      setStatus("Listening for Nimblesheet rolls…");
+      log("Bridge ready", "ok");
+
+      OBR.broadcast.onMessage(NIMBLE_ROLL_CHANNEL, async (event) => {
+        const data = event.data;
+        if (!data || !data.roll) return;
+
+        const formula = data.roll.formula;
+        const label = data.label || data.from;
+        await forwardToDicePlus(formula, label);
+      });
+    });
+
+    // UI controls
+    document.getElementById("clear").onclick = () => {
+      logEl.innerHTML = "";
+      log("Log cleared", "muted");
+    };
+
+    document.getElementById("test").onclick = async () => {
+      await forwardToDicePlus("1d20+5", "Test");
+    };
+  </script>
+</body>
+</html>
